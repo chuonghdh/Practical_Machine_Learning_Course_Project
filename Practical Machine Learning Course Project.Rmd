@@ -1,0 +1,241 @@
+---
+title: "Practical Machine Learning Course Project"
+subtitle: "Predict the manner of barbell lifts based on WLE Dataset"
+author: "Chuong Hoang"
+date: "Monday, Dec 14, 2015"
+output: 
+  html_document:
+    keep_md: yes
+  pdf_document: default
+  word_document: default
+---
+
+## I. Abstract:
+
+The purpose of this study is to build a machine learning model helping to predict the manner of barbell lifts. Based on Weight Lifting Exercises (WLE) Dataset, author will evaluate the most approriate model between two well known supervised learning methods are **Decision Tree** and **Random Forest**. Applying **Cross-validation** approach, the Random Forest reveal the significant better result with **99.2% accuracy** and **0.8% out-of-sample error** comparring to Decision Tree. The selected model will exercise on testing dataset for final evaluation.
+
+## II. Introduction:
+
+**Background**
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement. In this study, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Returning values of each observation were labeled corresponding to 5 categorized fashions[1]:
+
+* Class A - exactly according to the specification 
+* Class B - throwing the elbows to the front 
+* Class C - lifting the dumbbell only halfway 
+* Class D - lowering the dumbbell only halfway 
+* Class E - throwing the hips to the front
+
+**Data Sources**
+
+The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har].
+
+* The training data for this project are available here: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv]
+* The test data are available here: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv]
+
+**Machine Learning Methods Using**
+
+The nature of this study is Suppervised Learning which can be solved by many different methods such as: Decision trees, Naive Bayes, Logistic regression, Random Forests... But in the contrainst of time and project requirement, author only take into consider two methods are: Decision Tree and Random Forests.
+
+**Cross Validation**
+
+k-Folder Cross Validation method with k=5 will apply for this study. By this way each learning methods will be built and validated 5 times with different sub-training and sub-testing pairs. 
+
+**Result Evaluation**
+
+The learning model evaluation is based on 2 figures: **accuracy** and **expected out-of-sample error**. The selected model, which has lowest expected out-of-sample error will be used for final judgement on testing dataset.
+
+
+## III. Method:
+
+### Used Packages
+
+The research use 4 libraries with following descriptions:
+
+* *caret* - Set of functions that attempt to streamline the process for creating predictive models
+* *randomForest* - Classification and regression library based on Random Forest Method
+* *rpart* - Regressive Partitioning and Regression trees
+* *rpart.plot* - Plotting decision tree
+* *gridExtra* - Laying out plots
+
+```{r echo=TRUE, warning = FALSE, message=FALSE}
+library(caret)        
+library(randomForest) #Random Forest Method
+library(rpart)        #Decision Tree Method
+library(rattle)       #Plotting Decision Tree
+library(gridExtra)    #Laying out plot
+
+# set seed for reproducible results
+set.seed(1000)
+
+```
+
+### Data Preparation
+
+**Getting and Cleanning Data**
+
+Load training and testing datasets from HAR-WLE source and do some quick exploration.
+```{r echo=TRUE}
+# Load the training data set and replace missing values with "NA"
+trainingset <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+
+# Load the testing data set and replace missing values with "NA"
+testingset <- read.csv('pml-testing.csv', na.strings=c("NA","#DIV/0!", ""))
+
+# apply some quick exploration
+dim(trainingset)
+dim(testingset)
+str(trainingset, list.len=20)
+```
+
+After some quick exporation, noticing that:  
+
+* Columns from 1 to 7 maintain additional info about user, timestamps and windows which are not relevant as the input variables. Those can be remove from data sets.
+* A number of factors do not have any value with all "NA" values. Those can be remove from data sets. 
+
+```{r echo=TRUE}
+# Remove columns from 1 to 7 due to irrelevant values
+trainingset <- trainingset[,-c(1:7)]
+testingset <- testingset[,-c(1:7)]
+
+# Study how many factors that not having any value, remember to discard the last factor "classe" to be able to run sum function
+sum_each_factor <- sapply(trainingset[,-length(trainingset)],sum)
+sum(is.na(sum_each_factor))
+
+# Remove all not available factors
+trainingset <- trainingset[,!is.na(sum_each_factor)]
+testingset <- testingset[,!is.na(sum_each_factor)]
+
+```
+
+**Partitioning Data**
+
+Understand that the testing dataset provided by WLE is for final judgment purpose. moreover with only 20 observations without clasification, this dataset is not adequate to validate the predictive model. Therefore partitioning initial training dataset into subsets is neccessary for model development.
+
+in this research, author devide the initial training dataset into 2 sub-sets with proportion of 75%. 
+
+```{r echo=TRUE}
+# Create 75% in training subset index
+inTrain <- createDataPartition(y = trainingset$classe, p = .75, list = FALSE)
+
+# Create training subset and testing subset
+training_subset <- trainingset[inTrain, ]
+testing_subset <- trainingset[-inTrain, ]
+
+```
+
+**Explorating Data Sets**
+
+Before starting the predictive modeling, we should take a look into the distribution of classe levels in two subsets to ensure they have a balance distribution. Thus the partitions are suitable for modeling.
+
+```{r echo=TRUE}
+# Examine training subset distribution in Frequency and Proportion
+training_dist <- data.frame(table(training_subset$classe))
+training_dist <- data.frame(training_dist, Prop = round(training_dist$Freq/sum(training_dist$Freq),2))
+
+# Examine testing subset distribution in Frequency and Proportion
+testing_dist <- data.frame(table(testing_subset$classe))
+testing_dist <- data.frame(testing_dist, Prop = round(testing_dist$Freq/sum(testing_dist$Freq),2))
+
+# Create density plot demonstrate training subset
+training_plot <- ggplot(training_dist,aes(x=Var1, y=Freq, fill=Var1)) + 
+  geom_bar(stat="identity") + ggtitle("Training Subset Distribution") + xlab("Classe") +
+  geom_text(aes(label=c(paste(Prop*100,"%",sep=""))),vjust=-.2) 
+
+# Create density plot demonstrate testing subset
+testing_plot <- ggplot(testing_dist,aes(x=Var1, y=Freq, fill=Var1)) + 
+  geom_bar(stat="identity") + ggtitle("Testing Subset Distribution") + xlab("Classe") + 
+  geom_text(aes(label=c(paste(Prop*100,"%",sep=""))),vjust=-.2) + expand_limits(y=c(0,max(training_dist$Freq)))
+
+grid.arrange(training_plot, testing_plot, ncol=2)
+```
+
+As we can see the distribution of classe after partitioning into training and testing subsets is equal, thus those subsets are affordable for modeling. 
+
+### Predictive Modeling
+
+**Cross Validation Approach**
+
+k-Folder Cross Validation method with k=5 will apply for this study. 
+
+```{r echo=TRUE}
+# Define training control option in cross validation method with 5 folders
+fitControl = trainControl(method = "cv", number = 5)
+```
+
+**Decision Tree Method**
+
+Modeling with decision tree method
+
+```{r echo=TRUE}
+# Build model based on training subset
+model_Rpart <- train(classe~., method="rpart", data=training_subset)
+
+# Plot of the Decision Tree
+fancyRpartPlot(model_Rpart$finalModel)
+
+# Apply model to testing subset
+pred_Rpart <- predict(model_Rpart,testing_subset)
+
+# Display the predicting results
+confusionMatrix(pred_Rpart, testing_subset$classe)
+```
+
+Decision tree model results on training subset:
+
+* accuracy = `r round(confusionMatrix(pred_Rpart, testing_subset$classe)$overall[[1]],3)*100 ` %
+* expected out-of-sample error = `r round(1 - confusionMatrix(pred_Rpart, testing_subset$classe)$overall[[1]],3)*100` %
+
+**Random Forest Method**
+
+Modeling with Random Forest method
+
+```{r echo=TRUE}
+# Build model based on training subset
+model_Rforest <- train(classe~., method="rf",trControl = fitControl, data=training_subset)
+
+# Apply model to testing subset
+pred_Rforest <- predict(model_Rforest,testing_subset)
+
+# Display the predicting results
+confusionMatrix(pred_Rforest, testing_subset$classe)
+```
+
+Random Forest model results on training subset:
+
+* accuracy = `r round(confusionMatrix(pred_Rforest, testing_subset$classe)$overall[[1]],3)*100` % 
+* expected out-of-sample error = `r round(1 - confusionMatrix(pred_Rforest, testing_subset$classe)$overall[[1]],3)*100` %
+
+## IV. Conclusion:
+
+Comparring results from 2 models we can see that Random Forest model return higher accuracy rate than Decision Tree. As the consequence the expected out-of-sample error of Random Forest model is much more lower than Decision Tree one. `r round(1 - confusionMatrix(pred_Rforest, testing_subset$classe)$overall[[1]], 3)*100` % comparring to `r round(1 - confusionMatrix(pred_Rpart, testing_subset$classe)$overall[[1]],3)*100` %.
+
+With these measurable figures author can conclude that the Random Forest model is sufficient for deployment.We then will use the selected model to predict the classe of each observation in initial testing set.
+
+```{r}
+answers <- predict(model_Rforest,testingset)
+answers
+
+```
+
+## V. Course Submission:
+
+Create twenty .TXT file that we will upload one by one in the Coursera website (the 20 files created are called problem_1.txt to problem_20.txt):
+
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+```
+
+## *Literature Cited:*
+[1] http://groupware.les.inf.puc-rio.br/har#ixzz3uHkurQ3x Human Activity Recognition - Weight Lifting Exercises Dataset
+
+
+
